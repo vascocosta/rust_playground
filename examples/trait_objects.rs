@@ -1,5 +1,7 @@
+use std::time::Duration;
+
 // Super trait Survive that depends on Eat + Drink
-trait Survive: Eat + Drink {}
+trait Survive: Eat + Drink + std::fmt::Debug {}
 
 trait Eat {
     fn eat(&self) -> String;
@@ -9,6 +11,7 @@ trait Drink {
     fn drink(&self) -> String;
 }
 
+#[derive(Debug)]
 struct Cat;
 
 impl Eat for Cat {
@@ -25,6 +28,7 @@ impl Drink for Cat {
 
 impl Survive for Cat {}
 
+#[derive(Debug)]
 struct Dog;
 
 impl Eat for Dog {
@@ -41,10 +45,17 @@ impl Drink for Dog {
 
 impl Survive for Dog {}
 
+fn surviving_loop(animals: Vec<Box<dyn Survive>>) {
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        for animal in &animals {
+            println!("{}", animal.eat());
+            println!("{}", animal.drink());
+        }
+    }
+}
+
 fn main() {
     let animals: Vec<Box<dyn Survive>> = vec![Box::new(Cat {}), Box::new(Dog {})];
-
-    for animal in animals {
-        println!("{}", animal.eat());
-    }
+    surviving_loop(animals);
 }

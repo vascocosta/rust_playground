@@ -58,4 +58,6 @@ fn surviving_loop(animals: Vec<Box<dyn Survive>>) {
 fn main() {
     let animals: Vec<Box<dyn Survive>> = vec![Box::new(Cat {}), Box::new(Dog {})];
     surviving_loop(animals);
+
+    println!("{:?}", animals);
 }

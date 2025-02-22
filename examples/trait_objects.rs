@@ -45,10 +45,10 @@ impl Drink for Dog {
 
 impl Survive for Dog {}
 
-fn surviving_loop(animals: Vec<Box<dyn Survive>>) {
+fn surviving_loop(animals: &[Box<dyn Survive>]) {
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        for animal in &animals {
+        for animal in animals {
             println!("{}", animal.eat());
             println!("{}", animal.drink());
         }
@@ -57,7 +57,7 @@ fn surviving_loop(animals: Vec<Box<dyn Survive>>) {
 
 fn main() {
     let animals: Vec<Box<dyn Survive>> = vec![Box::new(Cat {}), Box::new(Dog {})];
-    surviving_loop(animals);
+    surviving_loop(&animals);
 
     println!("{:?}", animals);
 }

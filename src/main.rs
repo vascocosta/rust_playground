@@ -7,10 +7,14 @@ enum Token {
     Plus,
     Star,
     Greater,
+    Smaller,
     Equals,
     If,
+    While,
     LBrace,
     RBrace,
+    LParen,
+    RParen,
 }
 
 #[derive(Debug)]
@@ -35,6 +39,10 @@ enum Stmt {
         condition: Expr,
         then_branch: Vec<Stmt>,
     },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +50,7 @@ enum Operator {
     Add,
     Mul,
     Greater,
+    Smaller,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +96,7 @@ impl Parser {
     fn parse_stmt(&mut self) -> Stmt {
         match self.peek() {
             Some(Token::If) => self.parse_if(),
+            Some(Token::While) => self.parse_while(),
             Some(Token::Ident(_)) => {
                 if matches!(self.peek_next(), Some(Token::Equals)) {
                     self.parse_assign()
@@ -104,7 +114,7 @@ impl Parser {
             _ => panic!("expected identifier"),
         };
 
-        self.consume(); // =
+        self.consume(); // Discard Token::Equals
 
         let value = self.parse_expr(0);
 
@@ -112,10 +122,11 @@ impl Parser {
     }
 
     fn parse_if(&mut self) -> Stmt {
-        self.consume(); // if
+        self.consume(); // Discard Token::If
 
         let condition = self.parse_expr(0);
 
+        // Discard Token::LBrace
         match self.consume() {
             Some(Token::LBrace) => {}
             _ => panic!("expected {{"),
@@ -127,12 +138,33 @@ impl Parser {
             then_branch.push(self.parse_stmt());
         }
 
-        self.consume(); // }
+        self.consume(); // Discard Token::RBrace
 
         Stmt::If {
             condition,
             then_branch,
         }
+    }
+
+    fn parse_while(&mut self) -> Stmt {
+        self.consume(); // while
+
+        let condition = self.parse_expr(0);
+
+        match self.consume() {
+            Some(Token::LBrace) => {}
+            _ => panic!("expected {{"),
+        }
+
+        let mut body = Vec::new();
+
+        while !matches!(self.peek(), Some(Token::RBrace)) {
+            body.push(self.parse_stmt());
+        }
+
+        self.consume(); // }
+
+        Stmt::While { condition, body }
     }
 
     fn parse_expr(&mut self, min_prec: u8) -> Expr {
@@ -167,7 +199,16 @@ impl Parser {
         match self.consume() {
             Some(Token::Number(n)) => Expr::Number(n),
             Some(Token::Ident(name)) => Expr::Variable(name),
-            _ => panic!("unexpected token"),
+            Some(Token::LParen) => {
+                let expr = self.parse_expr(0);
+
+                match self.consume() {
+                    Some(Token::RParen) => expr,
+                    _ => panic!("expected ')'"),
+                }
+            }
+
+            other => panic!("unexpected token: {:?}", other),
         }
     }
 
@@ -176,6 +217,7 @@ impl Parser {
             Token::Plus => Some(Operator::Add),
             Token::Star => Some(Operator::Mul),
             Token::Greater => Some(Operator::Greater),
+            Token::Smaller => Some(Operator::Smaller),
             _ => None,
         }
     }
@@ -184,6 +226,7 @@ impl Parser {
 fn precedence(op: &Operator) -> u8 {
     match op {
         Operator::Greater => 5,
+        Operator::Smaller => 5,
         Operator::Add => 10,
         Operator::Mul => 20,
     }
@@ -213,6 +256,7 @@ fn eval_expr(expr: &Expr, env: &Env) -> Value {
                 (Value::Number(a), Value::Number(b), Operator::Add) => Value::Number(a + b),
                 (Value::Number(a), Value::Number(b), Operator::Mul) => Value::Number(a * b),
                 (Value::Number(a), Value::Number(b), Operator::Greater) => Value::Bool(a > b),
+                (Value::Number(a), Value::Number(b), Operator::Smaller) => Value::Bool(a < b),
                 _ => panic!("type error"),
             }
         }
@@ -243,6 +287,26 @@ fn exec_stmt(stmt: &Stmt, env: &mut Env) -> Option<Value> {
 
             None
         }
+
+        Stmt::While { condition, body } => {
+            loop {
+                let cond = eval_expr(condition, env);
+
+                match cond {
+                    Value::Bool(true) => {
+                        for stmt in body {
+                            exec_stmt(stmt, env);
+                        }
+                    }
+
+                    Value::Bool(false) => break,
+
+                    _ => panic!("while condition must be bool"),
+                }
+            }
+
+            None
+        }
     }
 }
 
@@ -259,48 +323,152 @@ fn run(program: &Program) -> Option<Value> {
     last
 }
 
-struct Tokenizer<'a> {
-    source: &'a str,
+struct Lexer {
+    chars: Vec<char>,
+    pos: usize,
 }
 
-impl<'a> Tokenizer<'a> {
-    fn tokenize(&self) -> Vec<Token> {
-        self.source
-            .split_ascii_whitespace()
-            .map(|s| match s {
-                "+" => Token::Plus,
-                "*" => Token::Star,
-                ">" => Token::Greater,
-                "=" => Token::Equals,
-                "if" => Token::If,
-                "{" => Token::LBrace,
-                "}" => Token::RBrace,
-                _ => {
-                    if let Ok(n) = s.parse::<i64>() {
-                        Token::Number(n)
-                    } else {
-                        Token::Ident(s.to_string())
-                    }
+impl Lexer {
+    fn new<'a>(source: &'a str) -> Self {
+        Self {
+            chars: source.chars().collect(),
+            pos: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let ch = self.peek();
+        self.pos += 1;
+        ch
+    }
+
+    fn tokenize(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+
+        while let Some(c) = self.peek() {
+            match c {
+                // ignore whitespace
+                c if c.is_whitespace() => {
+                    self.advance();
                 }
-            })
-            .collect()
+
+                // numbers
+                c if c.is_ascii_digit() => {
+                    tokens.push(self.lex_number());
+                }
+
+                // identifiers / keywords
+                c if c.is_ascii_alphabetic() => {
+                    tokens.push(self.lex_identifier());
+                }
+
+                '+' => {
+                    self.advance();
+                    tokens.push(Token::Plus);
+                }
+
+                '*' => {
+                    self.advance();
+                    tokens.push(Token::Star);
+                }
+
+                '>' => {
+                    self.advance();
+                    tokens.push(Token::Greater);
+                }
+
+                '<' => {
+                    self.advance();
+                    tokens.push(Token::Smaller);
+                }
+
+                '=' => {
+                    self.advance();
+                    tokens.push(Token::Equals);
+                }
+
+                '{' => {
+                    self.advance();
+                    tokens.push(Token::LBrace);
+                }
+
+                '}' => {
+                    self.advance();
+                    tokens.push(Token::RBrace);
+                }
+
+                '(' => {
+                    self.advance();
+                    tokens.push(Token::LParen);
+                }
+
+                ')' => {
+                    self.advance();
+                    tokens.push(Token::RParen);
+                }
+
+                _ => panic!("Unexpected character: {}", c),
+            }
+        }
+
+        tokens
+    }
+
+    fn lex_number(&mut self) -> Token {
+        let start = self.pos;
+
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let num: String = self.chars[start..self.pos].iter().collect();
+
+        Token::Number(num.parse().unwrap())
+    }
+
+    fn lex_identifier(&mut self) -> Token {
+        let start = self.pos;
+
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let ident: String = self.chars[start..self.pos].iter().collect();
+
+        match ident.as_str() {
+            "if" => Token::If,
+            "while" => Token::While,
+            _ => Token::Ident(ident),
+        }
     }
 }
 
 fn main() {
     let source = "
-        x = 5
-        z = 1
-        y = x * 3
-        if y > 10 {
-            y = y + 1
+        x = 0
+
+        while x < 5 {
+            x = x + 1
         }
-        y + z
+
+        x
     ";
 
-    let tokenizer = Tokenizer { source };
+    let mut lexer = Lexer::new(source);
 
-    let tokens = tokenizer.tokenize();
+    let tokens = lexer.tokenize();
 
     let mut parser = Parser { tokens, pos: 0 };
 
